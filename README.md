@@ -16,10 +16,10 @@ Reinstala **Ubuntu 20.04 / 22.04 / 24.04 / 26.04 LTS** desde la terminal en VPS 
 | Copia de seguridad | No | Archivos + volcado MySQL, con el comando `scp` listo para descargarla |
 | Confirmación | Sí/No | Hay que escribir **BORRAR**; 15 s para cancelar el reinicio |
 | Si algo falla | — | El sistema actual queda intacto y se anula todo automáticamente |
-| Modo de prueba | No | `--dry-run` verifica todo sin tocar nada |
+| Modo de prueba | No | `--dry-run` ejecuta preflight sin backup, descarga del motor ni cambios de sistema |
 | Después de instalar | Nada | Actualiza, optimiza la red (BBR), crea swap, ajusta límites, instala Docker/Go y ejecuta tu panel |
 
-Motor de reinstalación: [bin456789/reinstall](https://github.com/bin456789/reinstall) (GPL-3.0). Su documentación contempla ARM Server y el script detecta ARM64 y AMD64/x86_64. El motor se descarga en el momento desde su repositorio oficial y se valida antes de ejecutarse.
+Motor de reinstalación: [bin456789/reinstall](https://github.com/bin456789/reinstall) (GPL-3.0). Su documentación contempla ARM Server y el script detecta ARM64 y AMD64/x86_64. El motor se descarga en el momento desde su repositorio oficial y se valida sintácticamente antes de ejecutarse. La descarga desde `main` es mutable; esta versión aún no fija un commit ni checksum del motor.
 
 ---
 
@@ -112,7 +112,7 @@ Si la dejas vacía, el script te pedirá el comando cuando elijas "Instalar mi p
 ## Modo automático (sin preguntas)
 
 ```bash
-# Probar sin hacer nada
+# Preflight sin backup, descarga del motor ni cambios de sistema
 bash oracle-reinstaller.sh reinstall --dry-run
 
 # Reinstalar con clave SSH de tu GitHub, puerto 22, sin confirmación (¡cuidado!)
@@ -142,3 +142,12 @@ bash oracle-reinstaller.sh --help
 ---
 
 Uso bajo tu propia responsabilidad.
+
+
+## Estado de validación de esta versión candidata
+
+- Auditoría estática y pruebas de sintaxis Bash: pendientes de completar para esta revisión.
+- No se ha ejecutado una reinstalación real en hardware ARM64 ni AMD64/Intel.
+- `--dry-run` valida preflight y no crea respaldos ni descarga el motor; no equivale a una prueba integral del motor.
+- Si eliges crear un respaldo, debes descargarlo fuera de la VPS antes de reinstalar. Escribir `SALTAR` cancela el proceso.
+- No uses esta versión candidata para reinstalar servidores con datos importantes hasta completar pruebas reales y una copia externa verificada.
