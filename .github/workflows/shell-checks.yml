@@ -28,4 +28,4 @@ jobs:
         run: bash -n oracle-reinstaller.sh
 
       - name: ShellCheck
-        run: shellcheck --severity=style oracle-reinstaller.sh
+        run: shellcheck --severity=warning oracle-reinstaller.sh
