@@ -17,7 +17,7 @@
 #     bash oracle-reinstaller.sh --help     -> todas las opciones
 # ==============================================================================
 
-VERSION="1.2.1-rc1"
+VERSION="1.2.1-rc2"
 
 # ------------------------------------------------------------------------------
 #  CONFIGURACIÓN EDITABLE
@@ -32,8 +32,9 @@ DEFAULT_TZ="${DEFAULT_TZ:-America/Asuncion}"
 # Tamaño de swap por defecto (MB) si el servidor no tiene swap
 DEFAULT_SWAP_MB="${DEFAULT_SWAP_MB:-2048}"
 
-# Versión del motor (main = última estable del autor)
-REINSTALL_REF="${REINSTALL_REF:-main}"
+# Motor externo fijado a un commit inmutable y verificado por SHA-256.
+REINSTALL_REF="c2cf88b3a583bef3d6ecee99ea21b6eb6f664968"
+REINSTALL_SHA256="3ca358bf065ebd3ecb2f727e152a4b4fb9b154398abc1b9a5fe0b599f1027d7a"
 # ------------------------------------------------------------------------------
 
 set -o pipefail
@@ -344,20 +345,34 @@ preflight_reinstall() {
 
 download_engine() {
     mkdir -p "$WORKDIR"; chmod 700 "$WORKDIR"
-    local u
+    command -v sha256sum >/dev/null 2>&1 || die "Falta sha256sum (coreutils); no se puede verificar el motor."
+    local u actual
     for u in "${REINSTALL_URLS[@]}"; do
-        info "Descargando motor de reinstalación..."
+        info "Descargando motor fijado al commit ${REINSTALL_REF:0:12}..."
         if curl -fsSL --retry 3 --retry-delay 2 --max-time 60 -o "$REINSTALL_SH.tmp" "$u"; then
-            if head -c 2 "$REINSTALL_SH.tmp" | grep -q '#!' && grep -q 'bin456789' "$REINSTALL_SH.tmp" && bash -n "$REINSTALL_SH.tmp"; then
-                mv -f "$REINSTALL_SH.tmp" "$REINSTALL_SH"; chmod 700 "$REINSTALL_SH"
-                ok "Motor descargado y verificado ($(wc -l <"$REINSTALL_SH") líneas)"
-                return 0
+            actual=$(sha256sum "$REINSTALL_SH.tmp" | awk '{print $1}')
+            if [[ $actual != "$REINSTALL_SHA256" ]]; then
+                warn "SHA-256 incorrecto desde $u; se descarta el archivo."
+                rm -f "$REINSTALL_SH.tmp"
+                continue
             fi
-            warn "Archivo descargado inválido desde $u"
+            if ! head -c 2 "$REINSTALL_SH.tmp" | grep -q '#!' || ! grep -q 'bin456789' "$REINSTALL_SH.tmp" || ! bash -n "$REINSTALL_SH.tmp"; then
+                warn "Motor no válido sintácticamente desde $u"
+                rm -f "$REINSTALL_SH.tmp"
+                continue
+            fi
+            # La suma autentica el upstream exacto. Adaptación local: password por entorno, no argv.
+            if ! grep -q '^# MULTI_ARCH_REINSTALLER_PASSWORD_ENV$' "$REINSTALL_SH.tmp"; then
+                sed -i '/^# 第二遍扫描，处理参数$/i # MULTI_ARCH_REINSTALLER_PASSWORD_ENV\nif [ -n "${REINSTALL_PASSWORD:-}" ]; then password=$REINSTALL_PASSWORD; unset REINSTALL_PASSWORD; fi\n' "$REINSTALL_SH.tmp"
+            fi
+            bash -n "$REINSTALL_SH.tmp" || die "La adaptación local del motor no pasó bash -n."
+            mv -f "$REINSTALL_SH.tmp" "$REINSTALL_SH"; chmod 700 "$REINSTALL_SH"
+            ok "Motor autenticado por SHA-256 y adaptado ($(wc -l <"$REINSTALL_SH") líneas)"
+            return 0
         fi
     done
     rm -f "$REINSTALL_SH.tmp"
-    die "No se pudo descargar el motor de reinstalación."
+    die "No se pudo descargar un motor con SHA-256 válido."
 }
 
 backup_menu() {
@@ -547,7 +562,6 @@ run_reinstall() {
     download_engine
 
     local args=(ubuntu "$OPT_UBU_VER" --username root --ssh-port "$OPT_SSH_PORT" --web-port "$OPT_WEB_PORT")
-    [[ -n $OPT_PASSWORD ]] && args+=(--password "$OPT_PASSWORD")
     [[ -n $OPT_SSH_KEY  ]] && args+=(--ssh-key "$OPT_SSH_KEY")
     [[ $OPT_MINIMAL == 1 ]] && args+=(--minimal)
 
@@ -574,9 +588,9 @@ run_reinstall() {
     log "Ejecutando reinstall.sh ${shown}"
     local rc=0
     if (( HAS_TTY )); then
-        ( cd "$WORKDIR" && bash "$REINSTALL_SH" "${args[@]}" </dev/tty ) 2>&1 | tee "$WORKDIR/engine.log"; rc=${PIPESTATUS[0]}
+        ( cd "$WORKDIR" && REINSTALL_PASSWORD="$OPT_PASSWORD" bash "$REINSTALL_SH" "${args[@]}" </dev/tty ) 2>&1 | tee "$WORKDIR/engine.log"; rc=${PIPESTATUS[0]}
     else
-        ( cd "$WORKDIR" && bash "$REINSTALL_SH" "${args[@]}" ) 2>&1 | tee "$WORKDIR/engine.log"; rc=${PIPESTATUS[0]}
+        ( cd "$WORKDIR" && REINSTALL_PASSWORD="$OPT_PASSWORD" bash "$REINSTALL_SH" "${args[@]}" ) 2>&1 | tee "$WORKDIR/engine.log"; rc=${PIPESTATUS[0]}
     fi
     chmod 600 "$WORKDIR/engine.log" 2>/dev/null
 
@@ -903,7 +917,7 @@ COMANDOS
 
 OPCIONES DE REINSTALACIÓN
   --ubuntu VER         Versión: 20.04, 22.04, 24.04 o 26.04 (por defecto se pregunta)
-  --password CLAVE     Contraseña root (10-64, letras+números, símbolos @#%_+=.!-)
+  La contraseña se solicita sin eco; no se admite --password en argumentos CLI.
   --ssh-key CLAVE      Clave pública SSH, github:usuario o URL (sin contraseña)
   --ssh-port N         Puerto SSH del nuevo sistema (por defecto 22)
   --web-port N         Puerto web para ver el progreso (por defecto 80)
@@ -970,7 +984,7 @@ parse_args() {
     while (( $# )); do
         case $1 in
             reinstall|post|panel|info|cancel|menu) CMD=$1 ;;
-            --password)   OPT_PASSWORD=${2:-}; shift ;;
+            --password) die "Por seguridad, no pases contraseñas por argumentos CLI. Usa el menú interactivo." ;;
             --ssh-key)    OPT_SSH_KEY=${2:-}; shift ;;
             --ssh-port)   OPT_SSH_PORT=${2:-}; shift ;;
             --web-port)   OPT_WEB_PORT=${2:-}; shift ;;
