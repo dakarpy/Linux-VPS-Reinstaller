@@ -19,7 +19,7 @@ Reinstala **Ubuntu 20.04 / 22.04 / 24.04 / 26.04 LTS** desde la terminal en VPS 
 | Modo de prueba | No | `--dry-run` ejecuta preflight sin backup, descarga del motor ni cambios de sistema |
 | Después de instalar | Nada | Actualiza, optimiza la red (BBR), crea swap, ajusta límites, instala Docker/Go y ejecuta tu panel |
 
-Motor de reinstalación: [bin456789/reinstall](https://github.com/bin456789/reinstall) (GPL-3.0). Su documentación contempla ARM Server y el script detecta ARM64 y AMD64/x86_64. El motor se descarga en el momento desde su repositorio oficial y se valida sintácticamente antes de ejecutarse. La descarga desde `main` es mutable; esta versión aún no fija un commit ni checksum del motor.
+Motor de reinstalación: [bin456789/reinstall](https://github.com/bin456789/reinstall) (GPL-3.0). Su documentación contempla ARM Server y el script detecta ARM64 y AMD64/x86_64. El motor externo queda fijado al commit `c2cf88b3a583bef3d6ecee99ea21b6eb6f664968` y se valida con SHA-256 antes de ejecutarse. El script aplica después una adaptación local pequeña para recibir la contraseña mediante una variable de entorno, en vez de incluirla en los argumentos visibles del proceso. No es una protección frente a otros procesos privilegiados que puedan inspeccionar el entorno.
 
 ---
 
@@ -116,7 +116,7 @@ Si la dejas vacía, el script te pedirá el comando cuando elijas "Instalar mi p
 bash oracle-reinstaller.sh reinstall --dry-run
 
 # Reinstalar con clave SSH de tu GitHub, puerto 22, sin confirmación (¡cuidado!)
-bash oracle-reinstaller.sh reinstall --ssh-key github:TU_USUARIO --yes --yes-wipe-disk
+bash oracle-reinstaller.sh reinstall --ssh-key github:TU_USUARIO --yes --yes-wipe-disk --skip-backup
 
 # Preparar el servidor con Docker, sin Go, sin UFW
 bash oracle-reinstaller.sh post --yes --docker --no-go --no-ufw
@@ -143,6 +143,13 @@ bash oracle-reinstaller.sh --help
 
 Uso bajo tu propia responsabilidad.
 
+
+## Seguridad del motor y contraseña
+
+- El motor upstream se descarga desde un commit inmutable, no desde `main`.
+- Se comprueba el SHA-256 exacto antes de aceptar el archivo; los espejos deben entregar exactamente los mismos bytes.
+- La contraseña no se pasa como `--password` ni aparece en la lista normal de argumentos del motor. Se transmite mediante una variable de entorno y el motor la consume al iniciar.
+- Un administrador/root con capacidad de inspeccionar procesos puede acceder a información sensible del entorno; no se considera una frontera de seguridad frente a otros usuarios privilegiados.
 
 ## Estado de validación de esta versión candidata
 
