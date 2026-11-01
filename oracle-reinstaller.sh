@@ -17,7 +17,7 @@
 #     bash oracle-reinstaller.sh --help     -> todas las opciones
 # ==============================================================================
 
-VERSION="1.2.0"
+VERSION="1.2.1-rc1"
 
 # ------------------------------------------------------------------------------
 #  CONFIGURACIÓN EDITABLE
@@ -79,7 +79,7 @@ fi
 HAS_TTY=0
 { : </dev/tty; } 2>/dev/null && HAS_TTY=1
 
-log()  { printf '[%s] %s\n' "$(date '+%F %T')" "$*" >>"$LOG_FILE" 2>/dev/null || true; }
+log()  { (( OPT_DRY_RUN )) && return 0; printf '[%s] %s\n' "$(date '+%F %T')" "$*" >>"$LOG_FILE" 2>/dev/null || true; }
 info() { printf '%s\n' "${CBL}[i]${C0} $*"; log "INFO $*"; }
 ok()   { printf '%s\n' "${CG}[✓]${C0} $*"; log "OK   $*"; }
 warn() { printf '%s\n' "${CY}[!]${C0} $*"; log "WARN $*"; }
@@ -327,8 +327,11 @@ preflight_reinstall() {
         warn "Secure Boot está ACTIVADO. Puede impedir el arranque del entorno de reinstalación; desactívalo desde el panel del proveedor si fuera necesario."
     fi
 
-    ensure_cmd curl curl || die "No se pudo instalar curl."
-    ensure_cmd getopt util-linux || true
+    if ! command -v curl >/dev/null 2>&1; then
+        (( OPT_DRY_RUN )) && die "Falta curl; --dry-run no instalará dependencias. Instala curl y repite."
+        ensure_cmd curl curl || die "No se pudo instalar curl."
+    fi
+    (( OPT_DRY_RUN )) || ensure_cmd getopt util-linux || true
 
     net_ok "https://raw.githubusercontent.com" && ok "Conexión a GitHub" || warn "No hay conexión a GitHub (se probará el espejo)"
     net_ok "https://cloud-images.ubuntu.com"   && ok "Conexión a cloud-images.ubuntu.com" \
@@ -397,7 +400,10 @@ backup_menu() {
     printf '%s\n'   "  (o usa WinSCP / Termius / Bitvise SFTP con la misma ruta)"
     if (( ! OPT_YES )); then
         local c=""
-        while [[ ${c^^} != LISTO ]]; do c=$(ask "Escribe LISTO cuando hayas descargado la copia (o SALTAR)" ""); [[ ${c^^} == SALTAR ]] && break; done
+        while [[ ${c^^} != LISTO ]]; do
+            c=$(ask "Escribe LISTO cuando hayas descargado la copia (SALTAR cancela la reinstalación)" "")
+            if [[ ${c^^} == SALTAR ]]; then warn "Copia no confirmada; se cancela la reinstalación."; return 1; fi
+        done
     fi
 }
 
@@ -525,7 +531,13 @@ run_reinstall() {
         warn "Este servidor YA tiene Ubuntu $OPT_UBU_VER. Si solo quieres prepararlo, usa la opción 'Preparar servidor'."
         ask_yn "¿Reinstalar igualmente desde cero?" n || return 0
     fi
-    backup_menu
+    if (( OPT_DRY_RUN )); then
+        ok "Modo prueba: arquitectura, virtualización, RAM, disco, red y versión de Ubuntu verificados."
+        info "No se creó backup, no se descargó el motor y no se preparó ni ejecutó la reinstalación."
+        info "Este modo no valida credenciales, puertos ni disponibilidad real del motor."
+        return 0
+    fi
+    backup_menu || { warn "Proceso cancelado: confirma que descargaste la copia externa antes de continuar."; return 0; }
     configure_reinstall
     download_engine
 
@@ -877,7 +889,7 @@ OPCIONES DE REINSTALACIÓN
   --web-port N         Puerto web para ver el progreso (por defecto 80)
   --minimal            Usar Ubuntu Minimal
   --no-reboot          Preparar pero no reiniciar
-  --dry-run            Verificar todo sin ejecutar nada
+  --dry-run            Solo preflight; no crea backup ni descarga el motor
   --yes                Aceptar valores por defecto en las preguntas
   --yes-wipe-disk      Saltar la confirmación BORRAR (¡peligroso!)
 
@@ -972,8 +984,10 @@ parse_args() {
 
 main() {
     parse_args "$@"
-    touch "$LOG_FILE" 2>/dev/null && chmod 600 "$LOG_FILE" 2>/dev/null
-    command -v curl >/dev/null 2>&1 || { [[ $EUID -eq 0 ]] && ensure_cmd curl curl; }
+    if (( ! OPT_DRY_RUN )); then
+        touch "$LOG_FILE" 2>/dev/null && chmod 600 "$LOG_FILE" 2>/dev/null
+        command -v curl >/dev/null 2>&1 || { [[ $EUID -eq 0 ]] && ensure_cmd curl curl; }
+    fi
     PUBLIC_IP=$(public_ip)
     case ${CMD:-menu} in
         reinstall) run_reinstall ;;
