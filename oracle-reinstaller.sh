@@ -1,5 +1,3 @@
-[Reading 988 lines from start (total: 988 lines, 0 remaining)]
-
 #!/usr/bin/env bash
 # ==============================================================================
 #  MULTI-ARCH REINSTALLER PRO
