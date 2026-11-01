@@ -59,6 +59,7 @@ OPT_NO_REBOOT=0
 OPT_DRY_RUN=0
 OPT_YES=0
 OPT_WIPE_CONFIRMED=0
+OPT_SKIP_BACKUP=0
 OPT_TZ=""
 OPT_SWAP_MB=""
 OPT_DOCKER=""
@@ -360,6 +361,7 @@ download_engine() {
 }
 
 backup_menu() {
+    if (( OPT_SKIP_BACKUP )); then warn "Copia omitida explícitamente (--skip-backup). Asegúrate de tener un respaldo externo."; return 0; fi
     ask_yn "¿Quieres hacer una COPIA DE SEGURIDAD antes de borrar todo?" s || return 0
     local ts dest paths=() p sugg=""
     ts=$(date +%Y%m%d-%H%M)
@@ -398,7 +400,10 @@ backup_menu() {
     printf '%s\n'   "  Descárgala AHORA desde tu PC con:"
     printf '\n    %s\n\n' "${CC}scp -P $(current_ssh_port) root@${PUBLIC_IP}:${dest} .${C0}"
     printf '%s\n'   "  (o usa WinSCP / Termius / Bitvise SFTP con la misma ruta)"
-    if (( ! OPT_YES )); then
+    if (( OPT_YES )); then
+        warn "Modo automático: el respaldo recién creado sigue en esta VPS. Descárgalo y vuelve a ejecutar, o usa --skip-backup si ya tienes una copia externa."
+        return 1
+    else
         local c=""
         while [[ ${c^^} != LISTO ]]; do
             c=$(ask "Escribe LISTO cuando hayas descargado la copia (SALTAR cancela la reinstalación)" "")
@@ -907,6 +912,7 @@ OPCIONES DE REINSTALACIÓN
   --dry-run            Solo preflight; no crea backup ni descarga el motor
   --yes                Aceptar valores por defecto en las preguntas
   --yes-wipe-disk      Saltar la confirmación BORRAR (¡peligroso!)
+  --skip-backup        Omitir el backup local (solo si ya tienes copia externa)
 
 OPCIONES DE POST-INSTALACIÓN
   --timezone ZONA      Ej: America/Asuncion
@@ -974,6 +980,7 @@ parse_args() {
             --dry-run)    OPT_DRY_RUN=1 ;;
             --yes|-y)     OPT_YES=1 ;;
             --yes-wipe-disk) OPT_WIPE_CONFIRMED=1 ;;
+            --skip-backup) OPT_SKIP_BACKUP=1 ;;
             --timezone)   OPT_TZ=${2:-}; shift ;;
             --swap)       OPT_SWAP_MB=${2:-}; shift ;;
             --docker)     OPT_DOCKER=1 ;;
