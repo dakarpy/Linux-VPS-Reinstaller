@@ -146,8 +146,8 @@ Uso bajo tu propia responsabilidad.
 
 ## Estado de validación de esta versión candidata
 
-- Auditoría estática y pruebas de sintaxis Bash: pendientes de completar para esta revisión.
+- `bash -n`, `--help` y `--version` pasan en la VPS ARM64 de auditoría.
 - No se ha ejecutado una reinstalación real en hardware ARM64 ni AMD64/Intel.
 - `--dry-run` valida preflight y no crea respaldos ni descarga el motor; no equivale a una prueba integral del motor.
-- Si eliges crear un respaldo, debes descargarlo fuera de la VPS antes de reinstalar. Escribir `SALTAR` cancela el proceso.
+- Si eliges crear un respaldo, debes descargarlo fuera de la VPS antes de reinstalar. Escribir `SALTAR` cancela el proceso. En modo `--yes`, un respaldo recién creado bloquea la ejecución para evitar borrarlo junto con el disco; usa `--skip-backup` solo si ya verificaste una copia externa.
 - No uses esta versión candidata para reinstalar servidores con datos importantes hasta completar pruebas reales y una copia externa verificada.
