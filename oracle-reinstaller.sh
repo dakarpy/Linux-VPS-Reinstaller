@@ -362,8 +362,8 @@ download_engine() {
                 continue
             fi
             # La suma autentica el upstream exacto. Adaptación local: password por entorno, no argv.
-            if ! grep -q '^# MULTI_ARCH_REINSTALLER_PASSWORD_ENV$' "$REINSTALL_SH.tmp"; then
-                sed -i '/^# 第二遍扫描，处理参数$/i # MULTI_ARCH_REINSTALLER_PASSWORD_ENV\nif [ -n "${REINSTALL_PASSWORD:-}" ]; then password=$REINSTALL_PASSWORD; unset REINSTALL_PASSWORD; fi\n' "$REINSTALL_SH.tmp"
+            if ! grep -q '^# MULTI_ARCH_REINSTALLER_PASSWORD_FD$' "$REINSTALL_SH.tmp"; then
+                sed -i '/^# 第二遍扫描，处理参数$/i # MULTI_ARCH_REINSTALLER_PASSWORD_FD\nif [ "${REINSTALL_PASSWORD_FD:-}" = 3 ]; then IFS= read -r password <&3; unset REINSTALL_PASSWORD_FD; fi\n' "$REINSTALL_SH.tmp"
             fi
             bash -n "$REINSTALL_SH.tmp" || die "La adaptación local del motor no pasó bash -n."
             mv -f "$REINSTALL_SH.tmp" "$REINSTALL_SH"; chmod 700 "$REINSTALL_SH"
@@ -395,7 +395,9 @@ backup_menu() {
             if mysqldump --all-databases --single-transaction --routines --events >"/var/tmp/mysql-$ts.sql" 2>>"$LOG_FILE"; then
                 ok "Bases de datos volcadas"; paths+=("/var/tmp/mysql-$ts.sql")
             else
-                warn "No se pudo volcar MySQL sin contraseña (revisa /root/.my.cnf). Se continúa sin el volcado."
+                warn "Falló el volcado de MySQL/MariaDB; no se continuará con un respaldo incompleto."
+                rm -f "/var/tmp/mysql-$ts.sql"
+                return 1
             fi
         fi
     fi
@@ -403,12 +405,18 @@ backup_menu() {
     (( ${#paths[@]} )) || { warn "No se eligieron rutas. Sin copia de seguridad."; return 0; }
 
     info "Creando $dest ..."
-    if tar --exclude="$WORKDIR" --exclude='/root/.cache' --exclude='*.sock' --ignore-failed-read \
+    if ! tar --exclude="$WORKDIR" --exclude='/root/.cache' --exclude='*.sock' --ignore-failed-read \
            -czpf "$dest" "${paths[@]}" 2>>"$LOG_FILE"; then
-        ok "Copia creada: $dest ($(du -h "$dest" | cut -f1))"
-    else
-        warn "tar terminó con advertencias, revisa: $dest"
+        warn "Falló la creación del respaldo; se cancela para evitar borrar el único original."
+        rm -f "$dest" "/var/tmp/mysql-$ts.sql"
+        return 1
     fi
+    if ! tar -tzf "$dest" >/dev/null 2>&1 || [[ ! -s $dest ]]; then
+        warn "El respaldo no superó la verificación de integridad; se cancela la reinstalación."
+        rm -f "$dest" "/var/tmp/mysql-$ts.sql"
+        return 1
+    fi
+    ok "Copia creada y verificada: $dest ($(du -h "$dest" | cut -f1))"
     rm -f "/var/tmp/mysql-$ts.sql"
 
     printf '\n%s\n' "${CR}${CB}  ¡LA COPIA ESTÁ EN ESTE MISMO DISCO Y SE BORRARÁ AL REINSTALAR!${C0}"
@@ -588,9 +596,9 @@ run_reinstall() {
     log "Ejecutando reinstall.sh ${shown}"
     local rc=0
     if (( HAS_TTY )); then
-        ( cd "$WORKDIR" && REINSTALL_PASSWORD="$OPT_PASSWORD" bash "$REINSTALL_SH" "${args[@]}" </dev/tty ) 2>&1 | tee "$WORKDIR/engine.log"; rc=${PIPESTATUS[0]}
+        ( cd "$WORKDIR" && REINSTALL_PASSWORD_FD=3 bash "$REINSTALL_SH" "${args[@]}" 3<<<"$OPT_PASSWORD" </dev/tty ) 2>&1 | tee "$WORKDIR/engine.log"; rc=${PIPESTATUS[0]}
     else
-        ( cd "$WORKDIR" && REINSTALL_PASSWORD="$OPT_PASSWORD" bash "$REINSTALL_SH" "${args[@]}" ) 2>&1 | tee "$WORKDIR/engine.log"; rc=${PIPESTATUS[0]}
+        ( cd "$WORKDIR" && REINSTALL_PASSWORD_FD=3 bash "$REINSTALL_SH" "${args[@]}" 3<<<"$OPT_PASSWORD" ) 2>&1 | tee "$WORKDIR/engine.log"; rc=${PIPESTATUS[0]}
     fi
     chmod 600 "$WORKDIR/engine.log" 2>/dev/null
 
