@@ -142,5 +142,3 @@ bash oracle-reinstaller.sh --help
 ---
 
 Uso bajo tu propia responsabilidad.
-
-[executed on device: instance-br12 (06cffbc7-a229-4a9d-b2e0-4a1b65339d7a)]
