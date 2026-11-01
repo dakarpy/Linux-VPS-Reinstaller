@@ -768,19 +768,34 @@ post_go() {
     fi
     [[ $want == 1 ]] || return 0
     local garch
-    case $(arch_raw) in aarch64|arm64) garch=arm64 ;; x86_64) garch=amd64 ;; *) warn "Arquitectura no soportada para Go"; return ;; esac
+    case $(arch_raw) in aarch64|arm64) garch=arm64 ;; x86_64|amd64) garch=amd64 ;; *) warn "Arquitectura no soportada para Go"; return ;; esac
     local ver; ver=$(curl -fsSL --max-time 15 'https://go.dev/VERSION?m=text' 2>/dev/null | head -n1)
     [[ $ver =~ ^go[0-9]+\.[0-9]+ ]] || { warn "No se pudo obtener la versión de Go"; return; }
-    info "Instalando $ver ($garch)..."
-    if curl -fsSL --retry 3 -o "$WORKDIR/go.tgz" "https://go.dev/dl/${ver}.linux-${garch}.tar.gz"; then
-        rm -rf /usr/local/go && tar -C /usr/local -xzf "$WORKDIR/go.tgz" && rm -f "$WORKDIR/go.tgz"
+    local tmpdir; tmpdir=$(mktemp -d "$WORKDIR/go-install.XXXXXX") || { warn "No se pudo crear directorio temporal"; return; }
+    info "Descargando y validando $ver ($garch)..."
+    if ! curl -fsSL --retry 3 --max-time 180 -o "$tmpdir/go.tgz" "https://go.dev/dl/${ver}.linux-${garch}.tar.gz" ||
+       ! tar -tzf "$tmpdir/go.tgz" >/dev/null 2>&1 ||
+       ! tar -xzf "$tmpdir/go.tgz" -C "$tmpdir" ||
+       [[ ! -x "$tmpdir/go/bin/go" ]]; then
+        rm -rf "$tmpdir"
+        warn "Descarga o validación de Go falló; se conservó la instalación anterior."
+        return
+    fi
+    local olddir="$WORKDIR/go.previous"
+    rm -rf "$olddir"
+    if [[ -d /usr/local/go ]]; then
+        mv /usr/local/go "$olddir" || { rm -rf "$tmpdir"; warn "No se pudo respaldar Go anterior"; return; }
+    fi
+    if mv "$tmpdir/go" /usr/local/go; then
+        rm -rf "$olddir" "$tmpdir"
         printf 'export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin\n' >/etc/profile.d/golang.sh
         ok "Go instalado: $(/usr/local/go/bin/go version) (abre una nueva sesión SSH para usarlo)"
     else
-        warn "Falló la descarga de Go"
+        [[ -d "$olddir" ]] && mv "$olddir" /usr/local/go
+        rm -rf "$tmpdir"
+        warn "No se pudo activar la nueva versión; se restauró Go anterior."
     fi
 }
-
 post_firewall() {
     local want=${OPT_UFW}
     printf '\n%s\n' "  ${CD}Nota: en Oracle el bloqueo principal es la Security List / NSG de la VCN.${C0}"
