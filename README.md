@@ -148,7 +148,7 @@ Uso bajo tu propia responsabilidad.
 
 - El motor upstream se descarga desde un commit inmutable, no desde `main`.
 - Se comprueba el SHA-256 exacto antes de aceptar el archivo; los espejos deben entregar exactamente los mismos bytes.
-- La contraseña no se pasa como `--password` ni aparece en la lista normal de argumentos del motor. Se transmite mediante una variable de entorno y el motor la consume al iniciar.
+- La contraseña no se pasa como `--password` ni aparece en la lista normal de argumentos del motor. Se transmite mediante un descriptor de archivo heredado y el motor la consume al iniciar.
 - Un administrador/root con capacidad de inspeccionar procesos puede acceder a información sensible del entorno; no se considera una frontera de seguridad frente a otros usuarios privilegiados.
 
 ## Estado de validación de esta versión candidata
