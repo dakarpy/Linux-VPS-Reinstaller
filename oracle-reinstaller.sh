@@ -17,7 +17,7 @@
 #     bash oracle-reinstaller.sh --help     -> todas las opciones
 # ==============================================================================
 
-VERSION="1.2.1-rc2"
+VERSION="1.2.1-rc3"
 
 # ------------------------------------------------------------------------------
 #  CONFIGURACIÓN EDITABLE
@@ -405,7 +405,7 @@ backup_menu() {
     (( ${#paths[@]} )) || { warn "No se eligieron rutas. Sin copia de seguridad."; return 0; }
 
     info "Creando $dest ..."
-    if ! tar --exclude="$WORKDIR" --exclude='/root/.cache' --exclude='*.sock' --ignore-failed-read \
+    if ! tar --exclude="$WORKDIR" --exclude='/root/.cache' --exclude='*.sock' \
            -czpf "$dest" "${paths[@]}" 2>>"$LOG_FILE"; then
         warn "Falló la creación del respaldo; se cancela para evitar borrar el único original."
         rm -f "$dest" "/var/tmp/mysql-$ts.sql"
