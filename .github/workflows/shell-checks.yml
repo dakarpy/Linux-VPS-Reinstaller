@@ -1,0 +1,31 @@
+name: Shell checks
+
+on:
+  push:
+    branches:
+      - main
+      - "audit/**"
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  bash-and-shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Bash syntax
+        run: bash -n oracle-reinstaller.sh
+
+      - name: ShellCheck
+        run: shellcheck --severity=warning oracle-reinstaller.sh

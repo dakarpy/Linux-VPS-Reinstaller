@@ -17,7 +17,7 @@
 #     bash oracle-reinstaller.sh --help     -> todas las opciones
 # ==============================================================================
 
-VERSION="1.2.0"
+VERSION="1.2.1-rc3"
 
 # ------------------------------------------------------------------------------
 #  CONFIGURACIÓN EDITABLE
@@ -32,8 +32,9 @@ DEFAULT_TZ="${DEFAULT_TZ:-America/Asuncion}"
 # Tamaño de swap por defecto (MB) si el servidor no tiene swap
 DEFAULT_SWAP_MB="${DEFAULT_SWAP_MB:-2048}"
 
-# Versión del motor (main = última estable del autor)
-REINSTALL_REF="${REINSTALL_REF:-main}"
+# Motor externo fijado a un commit inmutable y verificado por SHA-256.
+REINSTALL_REF="c2cf88b3a583bef3d6ecee99ea21b6eb6f664968"
+REINSTALL_SHA256="3ca358bf065ebd3ecb2f727e152a4b4fb9b154398abc1b9a5fe0b599f1027d7a"
 # ------------------------------------------------------------------------------
 
 set -o pipefail
@@ -59,6 +60,7 @@ OPT_NO_REBOOT=0
 OPT_DRY_RUN=0
 OPT_YES=0
 OPT_WIPE_CONFIRMED=0
+OPT_SKIP_BACKUP=0
 OPT_TZ=""
 OPT_SWAP_MB=""
 OPT_DOCKER=""
@@ -79,7 +81,7 @@ fi
 HAS_TTY=0
 { : </dev/tty; } 2>/dev/null && HAS_TTY=1
 
-log()  { printf '[%s] %s\n' "$(date '+%F %T')" "$*" >>"$LOG_FILE" 2>/dev/null || true; }
+log()  { (( OPT_DRY_RUN )) && return 0; printf '[%s] %s\n' "$(date '+%F %T')" "$*" >>"$LOG_FILE" 2>/dev/null || true; }
 info() { printf '%s\n' "${CBL}[i]${C0} $*"; log "INFO $*"; }
 ok()   { printf '%s\n' "${CG}[✓]${C0} $*"; log "OK   $*"; }
 warn() { printf '%s\n' "${CY}[!]${C0} $*"; log "WARN $*"; }
@@ -327,8 +329,11 @@ preflight_reinstall() {
         warn "Secure Boot está ACTIVADO. Puede impedir el arranque del entorno de reinstalación; desactívalo desde el panel del proveedor si fuera necesario."
     fi
 
-    ensure_cmd curl curl || die "No se pudo instalar curl."
-    ensure_cmd getopt util-linux || true
+    if ! command -v curl >/dev/null 2>&1; then
+        (( OPT_DRY_RUN )) && die "Falta curl; --dry-run no instalará dependencias. Instala curl y repite."
+        ensure_cmd curl curl || die "No se pudo instalar curl."
+    fi
+    (( OPT_DRY_RUN )) || ensure_cmd getopt util-linux || true
 
     net_ok "https://raw.githubusercontent.com" && ok "Conexión a GitHub" || warn "No hay conexión a GitHub (se probará el espejo)"
     net_ok "https://cloud-images.ubuntu.com"   && ok "Conexión a cloud-images.ubuntu.com" \
@@ -340,23 +345,38 @@ preflight_reinstall() {
 
 download_engine() {
     mkdir -p "$WORKDIR"; chmod 700 "$WORKDIR"
-    local u
+    command -v sha256sum >/dev/null 2>&1 || die "Falta sha256sum (coreutils); no se puede verificar el motor."
+    local u actual
     for u in "${REINSTALL_URLS[@]}"; do
-        info "Descargando motor de reinstalación..."
+        info "Descargando motor fijado al commit ${REINSTALL_REF:0:12}..."
         if curl -fsSL --retry 3 --retry-delay 2 --max-time 60 -o "$REINSTALL_SH.tmp" "$u"; then
-            if head -c 2 "$REINSTALL_SH.tmp" | grep -q '#!' && grep -q 'bin456789' "$REINSTALL_SH.tmp" && bash -n "$REINSTALL_SH.tmp"; then
-                mv -f "$REINSTALL_SH.tmp" "$REINSTALL_SH"; chmod 700 "$REINSTALL_SH"
-                ok "Motor descargado y verificado ($(wc -l <"$REINSTALL_SH") líneas)"
-                return 0
+            actual=$(sha256sum "$REINSTALL_SH.tmp" | awk '{print $1}')
+            if [[ $actual != "$REINSTALL_SHA256" ]]; then
+                warn "SHA-256 incorrecto desde $u; se descarta el archivo."
+                rm -f "$REINSTALL_SH.tmp"
+                continue
             fi
-            warn "Archivo descargado inválido desde $u"
+            if ! head -c 2 "$REINSTALL_SH.tmp" | grep -q '#!' || ! grep -q 'bin456789' "$REINSTALL_SH.tmp" || ! bash -n "$REINSTALL_SH.tmp"; then
+                warn "Motor no válido sintácticamente desde $u"
+                rm -f "$REINSTALL_SH.tmp"
+                continue
+            fi
+            # La suma autentica el upstream exacto. Adaptación local: password por entorno, no argv.
+            if ! grep -q '^# MULTI_ARCH_REINSTALLER_PASSWORD_FD$' "$REINSTALL_SH.tmp"; then
+                sed -i '/^# 第二遍扫描，处理参数$/i # MULTI_ARCH_REINSTALLER_PASSWORD_FD\nif [ "${REINSTALL_PASSWORD_FD:-}" = 3 ]; then IFS= read -r password <&3; unset REINSTALL_PASSWORD_FD; fi\n' "$REINSTALL_SH.tmp"
+            fi
+            bash -n "$REINSTALL_SH.tmp" || die "La adaptación local del motor no pasó bash -n."
+            mv -f "$REINSTALL_SH.tmp" "$REINSTALL_SH"; chmod 700 "$REINSTALL_SH"
+            ok "Motor autenticado por SHA-256 y adaptado ($(wc -l <"$REINSTALL_SH") líneas)"
+            return 0
         fi
     done
     rm -f "$REINSTALL_SH.tmp"
-    die "No se pudo descargar el motor de reinstalación."
+    die "No se pudo descargar un motor con SHA-256 válido."
 }
 
 backup_menu() {
+    if (( OPT_SKIP_BACKUP )); then warn "Copia omitida explícitamente (--skip-backup). Asegúrate de tener un respaldo externo."; return 0; fi
     ask_yn "¿Quieres hacer una COPIA DE SEGURIDAD antes de borrar todo?" s || return 0
     local ts dest paths=() p sugg=""
     ts=$(date +%Y%m%d-%H%M)
@@ -375,7 +395,9 @@ backup_menu() {
             if mysqldump --all-databases --single-transaction --routines --events >"/var/tmp/mysql-$ts.sql" 2>>"$LOG_FILE"; then
                 ok "Bases de datos volcadas"; paths+=("/var/tmp/mysql-$ts.sql")
             else
-                warn "No se pudo volcar MySQL sin contraseña (revisa /root/.my.cnf). Se continúa sin el volcado."
+                warn "Falló el volcado de MySQL/MariaDB; no se continuará con un respaldo incompleto."
+                rm -f "/var/tmp/mysql-$ts.sql"
+                return 1
             fi
         fi
     fi
@@ -383,21 +405,33 @@ backup_menu() {
     (( ${#paths[@]} )) || { warn "No se eligieron rutas. Sin copia de seguridad."; return 0; }
 
     info "Creando $dest ..."
-    if tar --exclude="$WORKDIR" --exclude='/root/.cache' --exclude='*.sock' --ignore-failed-read \
+    if ! tar --exclude="$WORKDIR" --exclude='/root/.cache' --exclude='*.sock' \
            -czpf "$dest" "${paths[@]}" 2>>"$LOG_FILE"; then
-        ok "Copia creada: $dest ($(du -h "$dest" | cut -f1))"
-    else
-        warn "tar terminó con advertencias, revisa: $dest"
+        warn "Falló la creación del respaldo; se cancela para evitar borrar el único original."
+        rm -f "$dest" "/var/tmp/mysql-$ts.sql"
+        return 1
     fi
+    if ! tar -tzf "$dest" >/dev/null 2>&1 || [[ ! -s $dest ]]; then
+        warn "El respaldo no superó la verificación de integridad; se cancela la reinstalación."
+        rm -f "$dest" "/var/tmp/mysql-$ts.sql"
+        return 1
+    fi
+    ok "Copia creada y verificada: $dest ($(du -h "$dest" | cut -f1))"
     rm -f "/var/tmp/mysql-$ts.sql"
 
     printf '\n%s\n' "${CR}${CB}  ¡LA COPIA ESTÁ EN ESTE MISMO DISCO Y SE BORRARÁ AL REINSTALAR!${C0}"
     printf '%s\n'   "  Descárgala AHORA desde tu PC con:"
     printf '\n    %s\n\n' "${CC}scp -P $(current_ssh_port) root@${PUBLIC_IP}:${dest} .${C0}"
     printf '%s\n'   "  (o usa WinSCP / Termius / Bitvise SFTP con la misma ruta)"
-    if (( ! OPT_YES )); then
+    if (( OPT_YES )); then
+        warn "Modo automático: el respaldo recién creado sigue en esta VPS. Descárgalo y vuelve a ejecutar, o usa --skip-backup si ya tienes una copia externa."
+        return 1
+    else
         local c=""
-        while [[ ${c^^} != LISTO ]]; do c=$(ask "Escribe LISTO cuando hayas descargado la copia (o SALTAR)" ""); [[ ${c^^} == SALTAR ]] && break; done
+        while [[ ${c^^} != LISTO ]]; do
+            c=$(ask "Escribe LISTO cuando hayas descargado la copia (SALTAR cancela la reinstalación)" "")
+            if [[ ${c^^} == SALTAR ]]; then warn "Copia no confirmada; se cancela la reinstalación."; return 1; fi
+        done
     fi
 }
 
@@ -525,12 +559,17 @@ run_reinstall() {
         warn "Este servidor YA tiene Ubuntu $OPT_UBU_VER. Si solo quieres prepararlo, usa la opción 'Preparar servidor'."
         ask_yn "¿Reinstalar igualmente desde cero?" n || return 0
     fi
-    backup_menu
+    if (( OPT_DRY_RUN )); then
+        ok "Modo prueba: arquitectura, virtualización, RAM, disco, red y versión de Ubuntu verificados."
+        info "No se creó backup, no se descargó el motor y no se preparó ni ejecutó la reinstalación."
+        info "Este modo no valida credenciales, puertos ni disponibilidad real del motor."
+        return 0
+    fi
+    backup_menu || { warn "Proceso cancelado: confirma que descargaste la copia externa antes de continuar."; return 0; }
     configure_reinstall
     download_engine
 
     local args=(ubuntu "$OPT_UBU_VER" --username root --ssh-port "$OPT_SSH_PORT" --web-port "$OPT_WEB_PORT")
-    [[ -n $OPT_PASSWORD ]] && args+=(--password "$OPT_PASSWORD")
     [[ -n $OPT_SSH_KEY  ]] && args+=(--ssh-key "$OPT_SSH_KEY")
     [[ $OPT_MINIMAL == 1 ]] && args+=(--minimal)
 
@@ -557,9 +596,9 @@ run_reinstall() {
     log "Ejecutando reinstall.sh ${shown}"
     local rc=0
     if (( HAS_TTY )); then
-        ( cd "$WORKDIR" && bash "$REINSTALL_SH" "${args[@]}" </dev/tty ) 2>&1 | tee "$WORKDIR/engine.log"; rc=${PIPESTATUS[0]}
+        ( cd "$WORKDIR" && REINSTALL_PASSWORD_FD=3 bash "$REINSTALL_SH" "${args[@]}" 3<<<"$OPT_PASSWORD" </dev/tty ) 2>&1 | tee "$WORKDIR/engine.log"; rc=${PIPESTATUS[0]}
     else
-        ( cd "$WORKDIR" && bash "$REINSTALL_SH" "${args[@]}" ) 2>&1 | tee "$WORKDIR/engine.log"; rc=${PIPESTATUS[0]}
+        ( cd "$WORKDIR" && REINSTALL_PASSWORD_FD=3 bash "$REINSTALL_SH" "${args[@]}" 3<<<"$OPT_PASSWORD" ) 2>&1 | tee "$WORKDIR/engine.log"; rc=${PIPESTATUS[0]}
     fi
     chmod 600 "$WORKDIR/engine.log" 2>/dev/null
 
@@ -756,19 +795,34 @@ post_go() {
     fi
     [[ $want == 1 ]] || return 0
     local garch
-    case $(arch_raw) in aarch64|arm64) garch=arm64 ;; x86_64) garch=amd64 ;; *) warn "Arquitectura no soportada para Go"; return ;; esac
+    case $(arch_raw) in aarch64|arm64) garch=arm64 ;; x86_64|amd64) garch=amd64 ;; *) warn "Arquitectura no soportada para Go"; return ;; esac
     local ver; ver=$(curl -fsSL --max-time 15 'https://go.dev/VERSION?m=text' 2>/dev/null | head -n1)
     [[ $ver =~ ^go[0-9]+\.[0-9]+ ]] || { warn "No se pudo obtener la versión de Go"; return; }
-    info "Instalando $ver ($garch)..."
-    if curl -fsSL --retry 3 -o "$WORKDIR/go.tgz" "https://go.dev/dl/${ver}.linux-${garch}.tar.gz"; then
-        rm -rf /usr/local/go && tar -C /usr/local -xzf "$WORKDIR/go.tgz" && rm -f "$WORKDIR/go.tgz"
+    local tmpdir; tmpdir=$(mktemp -d "$WORKDIR/go-install.XXXXXX") || { warn "No se pudo crear directorio temporal"; return; }
+    info "Descargando y validando $ver ($garch)..."
+    if ! curl -fsSL --retry 3 --max-time 180 -o "$tmpdir/go.tgz" "https://go.dev/dl/${ver}.linux-${garch}.tar.gz" ||
+       ! tar -tzf "$tmpdir/go.tgz" >/dev/null 2>&1 ||
+       ! tar -xzf "$tmpdir/go.tgz" -C "$tmpdir" ||
+       [[ ! -x "$tmpdir/go/bin/go" ]]; then
+        rm -rf "$tmpdir"
+        warn "Descarga o validación de Go falló; se conservó la instalación anterior."
+        return
+    fi
+    local olddir="$WORKDIR/go.previous"
+    rm -rf "$olddir"
+    if [[ -d /usr/local/go ]]; then
+        mv /usr/local/go "$olddir" || { rm -rf "$tmpdir"; warn "No se pudo respaldar Go anterior"; return; }
+    fi
+    if mv "$tmpdir/go" /usr/local/go; then
+        rm -rf "$olddir" "$tmpdir"
         printf 'export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin\n' >/etc/profile.d/golang.sh
         ok "Go instalado: $(/usr/local/go/bin/go version) (abre una nueva sesión SSH para usarlo)"
     else
-        warn "Falló la descarga de Go"
+        [[ -d "$olddir" ]] && mv "$olddir" /usr/local/go
+        rm -rf "$tmpdir"
+        warn "No se pudo activar la nueva versión; se restauró Go anterior."
     fi
 }
-
 post_firewall() {
     local want=${OPT_UFW}
     printf '\n%s\n' "  ${CD}Nota: en Oracle el bloqueo principal es la Security List / NSG de la VCN.${C0}"
@@ -871,15 +925,16 @@ COMANDOS
 
 OPCIONES DE REINSTALACIÓN
   --ubuntu VER         Versión: 20.04, 22.04, 24.04 o 26.04 (por defecto se pregunta)
-  --password CLAVE     Contraseña root (10-64, letras+números, símbolos @#%_+=.!-)
+  La contraseña se solicita sin eco; no se admite --password en argumentos CLI.
   --ssh-key CLAVE      Clave pública SSH, github:usuario o URL (sin contraseña)
   --ssh-port N         Puerto SSH del nuevo sistema (por defecto 22)
   --web-port N         Puerto web para ver el progreso (por defecto 80)
   --minimal            Usar Ubuntu Minimal
   --no-reboot          Preparar pero no reiniciar
-  --dry-run            Verificar todo sin ejecutar nada
+  --dry-run            Solo preflight; no crea backup ni descarga el motor
   --yes                Aceptar valores por defecto en las preguntas
   --yes-wipe-disk      Saltar la confirmación BORRAR (¡peligroso!)
+  --skip-backup        Omitir el backup local (solo si ya tienes copia externa)
 
 OPCIONES DE POST-INSTALACIÓN
   --timezone ZONA      Ej: America/Asuncion
@@ -937,7 +992,7 @@ parse_args() {
     while (( $# )); do
         case $1 in
             reinstall|post|panel|info|cancel|menu) CMD=$1 ;;
-            --password)   OPT_PASSWORD=${2:-}; shift ;;
+            --password) die "Por seguridad, no pases contraseñas por argumentos CLI. Usa el menú interactivo." ;;
             --ssh-key)    OPT_SSH_KEY=${2:-}; shift ;;
             --ssh-port)   OPT_SSH_PORT=${2:-}; shift ;;
             --web-port)   OPT_WEB_PORT=${2:-}; shift ;;
@@ -947,6 +1002,7 @@ parse_args() {
             --dry-run)    OPT_DRY_RUN=1 ;;
             --yes|-y)     OPT_YES=1 ;;
             --yes-wipe-disk) OPT_WIPE_CONFIRMED=1 ;;
+            --skip-backup) OPT_SKIP_BACKUP=1 ;;
             --timezone)   OPT_TZ=${2:-}; shift ;;
             --swap)       OPT_SWAP_MB=${2:-}; shift ;;
             --docker)     OPT_DOCKER=1 ;;
@@ -972,8 +1028,10 @@ parse_args() {
 
 main() {
     parse_args "$@"
-    touch "$LOG_FILE" 2>/dev/null && chmod 600 "$LOG_FILE" 2>/dev/null
-    command -v curl >/dev/null 2>&1 || { [[ $EUID -eq 0 ]] && ensure_cmd curl curl; }
+    if (( ! OPT_DRY_RUN )); then
+        touch "$LOG_FILE" 2>/dev/null && chmod 600 "$LOG_FILE" 2>/dev/null
+        command -v curl >/dev/null 2>&1 || { [[ $EUID -eq 0 ]] && ensure_cmd curl curl; }
+    fi
     PUBLIC_IP=$(public_ip)
     case ${CMD:-menu} in
         reinstall) run_reinstall ;;
