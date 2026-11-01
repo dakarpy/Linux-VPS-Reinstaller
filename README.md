@@ -1,5 +1,3 @@
-[Reading 144 lines from start (total: 144 lines, 0 remaining)]
-
 # Multi-Arch Reinstaller PRO
 
 Reinstala **Ubuntu 20.04 / 22.04 / 24.04 / 26.04 LTS** desde la terminal en VPS **ARM64 (Oracle Ampere A1)** y **AMD64/x86_64 (AMD EPYC, Ryzen y también Intel)**. Prepara y optimiza el servidor para instalar tu panel.
